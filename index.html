@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Organic AI Visualizer - Pro Edition</title>
+    <style>
+        body { background-color: #ffffff; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; overflow: hidden; font-family: sans-serif; }
+        canvas { width: 100%; max-width: 500px; height: 500px; filter: blur(0.5px); }
+        
+        /* 設定パネル */
+        #config-panel {
+            position: absolute; top: 20px; left: 20px; background: rgba(255, 255, 255, 0.95);
+            padding: 15px; border-radius: 12px; border: 1px solid #ddd; z-index: 100; font-size: 11px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1); width: 240px; max-height: 90vh; overflow-y: auto;
+        }
+        details summary { cursor: pointer; font-weight: bold; margin-bottom: 10px; color: #333; font-size: 13px; }
+        .config-section { border-bottom: 1px solid #eee; margin-bottom: 10px; padding-bottom: 10px; }
+        .section-title { font-weight: bold; margin-bottom: 8px; color: #555; display: block; }
+        .config-item { margin-bottom: 8px; display: flex; flex-direction: column; }
+        .config-item label { margin-bottom: 2px; color: #777; display: flex; justify-content: space-between; }
+        
+        .mode-selector { display: flex; gap: 5px; margin-top: 5px; }
+        .mode-selector button { flex: 1; padding: 6px 0; font-size: 10px; background: #eee; color: #666; border: none; border-radius: 6px; cursor: pointer; }
+        .mode-selector button.active { background: #333; color: white; }
+
+        input[type="range"] { width: 100%; cursor: pointer; }
+        input[type="color"] { border: none; width: 100%; height: 20px; cursor: pointer; }
+        .checkbox-item { flex-direction: row !important; align-items: center; gap: 8px; cursor: pointer; }
+
+        /* デバッグパネル */
+        #debug-panel {
+            position: absolute; top: 20px; right: 20px; background: rgba(0, 0, 0, 0.8);
+            color: #0f0; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 11px; 
+            pointer-events: none; display: none; /* デフォルト非表示 */
+        }
+
+        .controls { position: absolute; bottom: 5%; display: flex; gap: 10px; }
+        .main-btn { padding: 12px 24px; cursor: pointer; border: none; border-radius: 30px; font-weight: bold; transition: 0.2s; color: white; background: #333; }
+        .main-btn:disabled { background: #ccc; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+
+    <div id="config-panel">
+        <details open>
+            <summary>⚙️ Advanced Settings</summary>
+            
+            <div class="config-section">
+                <span class="section-title">Reaction Mode</span>
+                <div class="mode-selector" id="mode-filter">
+                    <button id="btn-mode-both" class="active" onclick="setFilter('both')">Both</button>
+                    <button id="btn-mode-user" onclick="setFilter('user_only')">User Only</button>
+                    <button id="btn-mode-ai" onclick="setFilter('ai_only')">AI Only</button>
+                </div>
+            </div>
+
+            <div class="config-section">
+                <span class="section-title">Common Shape</span>
+                <div class="config-item">
+                    <label>頂点の数: <span id="val-global-points">12</span></label>
+                    <input type="range" id="in-global-points" min="3" max="60" step="1" value="12">
+                </div>
+                <div class="config-item checkbox-item">
+                    <input type="checkbox" id="in-debug-toggle">
+                    <label for="in-debug-toggle" style="margin:0; cursor:pointer;">Debug Monitor を表示</label>
+                </div>
+            </div>
+
+            <div class="config-section">
+                <span class="section-title" style="color: #4fd1a5;">User (Mic)</span>
+                <div class="config-item">
+                    <label>閾値: <span id="val-u-th">2.5</span></label>
+                    <input type="range" id="in-u-th" min="0" max="10" step="0.1" value="2.5">
+                </div>
+                <div class="config-item">
+                    <label>反応感度: <span id="val-u-sens">2.0</span></label>
+                    <input type="range" id="in-u-sens" min="0.1" max="10" step="0.1" value="2.0">
+                </div>
+                <input type="color" id="in-u-col" value="#4fd1a5">
+            </div>
+
+            <div class="config-section">
+                <span class="section-title" style="color: #00f2fe;">AI (System)</span>
+                <div class="config-item">
+                    <label>閾値: <span id="val-a-th">0.0</span></label>
+                    <input type="range" id="in-a-th" min="0" max="5" step="0.1" value="0.0">
+                </div>
+                <div class="config-item">
+                    <label>反応感度: <span id="val-a-sens">2.2</span></label>
+                    <input type="range" id="in-a-sens" min="0.1" max="10" step="0.1" value="2.2">
+                </div>
+                <input type="color" id="in-a-col" value="#00f2fe">
+            </div>
+        </details>
+    </div>
+
+    <div id="debug-panel">
+        MODE: <span id="db-mode">WAITING</span><br>
+        AI Vol: <span id="db-sys-vol">0.0</span><br>
+        User Vol: <span id="db-mic-vol">0.0</span>
+    </div>
+
+    <canvas id="visualizer"></canvas>
+
+    <div class="controls">
+        <button id="micBtn" class="main-btn">1. マイクを接続</button>
+        <button id="sysBtn" class="main-btn" disabled>2. AI音声を接続</button>
+    </div>
+
+    <script>
+        const config = {
+            points: 12,
+            modeFilter: 'both',
+            showDebug: false,
+            stateHoldMs: 500,
+            user: { threshold: 2.5, sensitivity: 2.0, color: [79, 209, 165] },
+            ai: { threshold: 0.0, sensitivity: 2.2, color: [0, 242, 254] }
+        };
+
+        const hexToRgb = hex => hex.match(/[A-Za-z0-9]{2}/g).map(v => parseInt(v, 16));
+
+        function setFilter(mode) {
+            config.modeFilter = mode;
+            document.querySelectorAll('#mode-filter button').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(`btn-mode-${mode.split('_')[0]}`).classList.add('active');
+        }
+
+        const setupInput = (id, callback) => {
+            const el = document.getElementById(id);
+            const display = document.getElementById(id.replace('in-', 'val-'));
+            el.oninput = (e) => {
+                const val = el.type === 'checkbox' ? el.checked : e.target.value;
+                callback(val);
+                if(display) display.innerText = val;
+            };
+        };
+
+        setupInput('in-global-points', v => config.points = parseInt(v));
+        setupInput('in-u-th', v => config.user.threshold = parseFloat(v));
+        setupInput('in-u-sens', v => config.user.sensitivity = parseFloat(v));
+        setupInput('in-u-col', v => config.user.color = hexToRgb(v));
+        setupInput('in-a-th', v => config.ai.threshold = parseFloat(v));
+        setupInput('in-a-sens', v => config.ai.sensitivity = parseFloat(v));
+        setupInput('in-a-col', v => config.ai.color = hexToRgb(v));
+        
+        // デバッグ表示のトグル
+        const debugPanel = document.getElementById('debug-panel');
+        setupInput('in-debug-toggle', v => {
+            config.showDebug = v;
+            debugPanel.style.display = v ? 'block' : 'none';
+        });
+
+        const canvas = document.getElementById('visualizer');
+        const ctx = canvas.getContext('2d');
+        const micBtn = document.getElementById('micBtn');
+        const sysBtn = document.getElementById('sysBtn');
+        
+        canvas.width = 800; canvas.height = 800;
+        let audioCtx, micAnalyser, sysAnalyser;
+        let smoothedVol = 0, time = 0, activeMode = 'user', lastStateChangeTime = 0;
+        let currentColor = [...config.user.color];
+
+        const getVolume = (analyser) => {
+            if (!analyser) return 0;
+            const data = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteTimeDomainData(data);
+            let sum = 0;
+            for (let i = 0; i < data.length; i++) sum += Math.abs(data[i] - 128);
+            return sum / data.length;
+        };
+
+        micBtn.onclick = async () => {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            micAnalyser = audioCtx.createAnalyser(); micAnalyser.fftSize = 512;
+            audioCtx.createMediaStreamSource(stream).connect(micAnalyser);
+            micBtn.disabled = true; sysBtn.disabled = false;
+            if (time === 0) draw();
+        };
+
+        sysBtn.onclick = async () => {
+            const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+            sysAnalyser = audioCtx.createAnalyser(); sysAnalyser.fftSize = 512;
+            audioCtx.createMediaStreamSource(stream).connect(sysAnalyser);
+            sysBtn.disabled = true;
+        };
+
+        function drawBlob(ctx, x, y, radius, color, variance, t, pointsCount) {
+            ctx.beginPath();
+            for (let i = 0; i < pointsCount; i++) {
+                const angle = (i / pointsCount) * Math.PI * 2;
+                const r = radius + Math.sin(t * 1.2 + i * 1.3) * variance;
+                ctx.lineTo(x + Math.cos(angle) * r, y + Math.sin(angle) * r);
+            }
+            ctx.closePath(); ctx.fillStyle = color; ctx.fill();
+        }
+
+        function draw() {
+            requestAnimationFrame(draw);
+            const now = performance.now();
+            time += 0.03;
+
+            const uV = getVolume(micAnalyser);
+            const aV = getVolume(sysAnalyser);
+
+            let winner = activeMode;
+            if (config.modeFilter === 'ai_only') winner = 'ai';
+            else if (config.modeFilter === 'user_only') winner = 'user';
+            else {
+                if (aV > config.ai.threshold) winner = 'ai';
+                else if (uV > config.user.threshold) winner = 'user';
+            }
+
+            if (winner !== activeMode && (now - lastStateChangeTime) > config.stateHoldMs) {
+                activeMode = winner;
+                lastStateChangeTime = now;
+            }
+
+            if (config.showDebug) {
+                document.getElementById('db-mode').innerText = activeMode.toUpperCase();
+                document.getElementById('db-sys-vol').innerText = aV.toFixed(2);
+                document.getElementById('db-mic-vol').innerText = uV.toFixed(2);
+            }
+
+            let tVol = 0;
+            if (activeMode === 'ai') tVol = (config.modeFilter === 'user_only') ? 0 : aV * config.ai.sensitivity;
+            else tVol = (config.modeFilter === 'ai_only') ? 0 : uV * config.user.sensitivity;
+
+            let tCol = (activeMode === 'ai') ? config.ai.color : config.user.color;
+
+            smoothedVol = smoothedVol * 0.85 + tVol * 0.15;
+            for (let i = 0; i < 3; i++) currentColor[i] = currentColor[i] * 0.9 + tCol[i] * 0.1;
+
+            ctx.clearRect(0, 0, 800, 800);
+            const cx = 400, cy = 400;
+            const colMain = `rgb(${currentColor.map(Math.round).join(',')})`;
+            const colAlpha = (a) => `rgba(${currentColor.map(Math.round).join(',')}, ${a})`;
+
+            drawBlob(ctx, cx, cy, 180 + smoothedVol * 3.5, colAlpha(0.1), 10, time * 0.4, config.points);
+            drawBlob(ctx, cx, cy, 140 + Math.sin(time * 0.8) * 6 + smoothedVol * 2, colAlpha(0.25), 6, time * 0.7, config.points);
+            drawBlob(ctx, cx, cy, 110 + smoothedVol * 0.7, colMain, 3, time, config.points);
+            
+            ctx.beginPath(); ctx.fillStyle = "#fff";
+            ctx.arc(cx, cy, 45 + smoothedVol * 0.15 + Math.sin(time * 0.8) * 2, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    </script>
+</body>
+</html>
